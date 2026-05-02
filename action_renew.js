@@ -158,24 +158,30 @@ async function handleTurnstile(page, timeoutMs = 30000) {
 
                 console.log(`   >> 找到 Turnstile iframe: x=${box.x.toFixed(0)}, y=${box.y.toFixed(0)}, w=${box.width.toFixed(0)}, h=${box.height.toFixed(0)}`);
 
-                // checkbox 通常在 iframe 宽度约 15% 处、垂直居中
-                const clickX = box.x + Math.round(box.width * 0.15);
+                // checkbox 在 iframe 内左侧，尝试多个 x 位置确保点中
+                // 从截图看 checkbox 约在 iframe 左边 10-20px 处
                 const clickY = box.y + box.height / 2;
+                const clickCandidates = [
+                    box.x + 16,  // 最左侧
+                    box.x + 24,  // 稍右
+                    box.x + 32,  // 再右一点
+                ];
 
                 const client = await page.context().newCDPSession(page);
 
-                // 模拟鼠标移入
-                await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: clickX, y: clickY, button: 'none' });
-                await new Promise(r => setTimeout(r, 200 + Math.random() * 200));
+                for (const clickX of clickCandidates) {
+                    // 鼠标移入
+                    await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: clickX, y: clickY, button: 'none' });
+                    await new Promise(r => setTimeout(r, 150 + Math.random() * 150));
+                    // 按下
+                    await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: clickX, y: clickY, button: 'left', clickCount: 1 });
+                    await new Promise(r => setTimeout(r, 60 + Math.random() * 80));
+                    // 释放
+                    await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: clickX, y: clickY, button: 'left', clickCount: 1 });
+                    console.log(`   >> CDP 点击 (${clickX.toFixed(0)}, ${clickY.toFixed(0)})`);
+                    await new Promise(r => setTimeout(r, 300));
+                }
 
-                // 鼠标按下
-                await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: clickX, y: clickY, button: 'left', clickCount: 1 });
-                await new Promise(r => setTimeout(r, 80 + Math.random() * 80));
-
-                // 鼠标释放
-                await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: clickX, y: clickY, button: 'left', clickCount: 1 });
-
-                console.log(`   >> CDP 鼠标点击已发送至 (${clickX.toFixed(0)}, ${clickY.toFixed(0)})`);
                 await client.detach();
 
                 // 等待验证结果，最多 12 秒
@@ -194,14 +200,20 @@ async function handleTurnstile(page, timeoutMs = 30000) {
                         }
                     } catch (e) {}
 
-                    // 方式2：检查主页面的隐藏 token input 是否有值
+                    // 方式2：检查主页面隐藏 input 的值是否是有效 token（以 0. 开头的长字符串）
                     try {
                         const hasToken = await page.evaluate(() => {
-                            const el = document.querySelector('input[name="cf-turnstile-response"]');
-                            return el && el.value && el.value.length > 10;
+                            const inputs = document.querySelectorAll('input[name="cf-turnstile-response"]');
+                            for (const el of inputs) {
+                                // 有效 token 通常以 "0." 开头且长度超过 100
+                                if (el.value && el.value.startsWith('0.') && el.value.length > 100) {
+                                    return true;
+                                }
+                            }
+                            return false;
                         }).catch(() => false);
                         if (hasToken) {
-                            console.log('   >> ✅ Turnstile 验证成功（检测到 token）');
+                            console.log('   >> ✅ Turnstile 验证成功（检测到有效 token）');
                             return true;
                         }
                     } catch (e) {}
