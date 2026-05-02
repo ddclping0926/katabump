@@ -158,8 +158,8 @@ async function handleTurnstile(page, timeoutMs = 30000) {
 
                 console.log(`   >> 找到 Turnstile iframe: x=${box.x.toFixed(0)}, y=${box.y.toFixed(0)}, w=${box.width.toFixed(0)}, h=${box.height.toFixed(0)}`);
 
-                // checkbox 通常在 iframe 左侧约 25px、垂直居中位置
-                const clickX = box.x + 25;
+                // checkbox 通常在 iframe 宽度约 15% 处、垂直居中
+                const clickX = box.x + Math.round(box.width * 0.15);
                 const clickY = box.y + box.height / 2;
 
                 const client = await page.context().newCDPSession(page);
@@ -291,13 +291,29 @@ async function handleTurnstile(page, timeoutMs = 30000) {
             await page.getByRole('textbox', { name: 'Password' }).fill(user.password);
             await page.waitForTimeout(800);
 
-            // 处理登录页 Turnstile
-            await handleTurnstile(page, 20000);
+            // 处理登录页 Turnstile，最多重试3次
+            let turnstileOk = false;
+            for (let tr = 0; tr < 3; tr++) {
+                turnstileOk = await handleTurnstile(page, 20000);
+                if (turnstileOk) break;
+                if (tr < 2) console.log(`   >> Turnstile 第 ${tr + 1} 次未确认，稍候重试...`);
+            }
 
             await page.getByRole('button', { name: 'Login', exact: true }).click();
-            await page.waitForTimeout(3000);
+            await page.waitForTimeout(4000);
 
-            // 检查登录失败
+            // 检查当前 URL 判断登录结果
+            const currentUrl = page.url();
+            console.log('   >> 登录后 URL:', currentUrl);
+
+            if (currentUrl.includes('error=captcha')) {
+                console.error('   >> ❌ 登录失败：Turnstile 验证未通过');
+                const shot = path.join(SCREENSHOTS_DIR, `${safeUsername}_captcha_failed.png`);
+                await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
+                await sendTelegramMessage(`❌ *登录失败*\n用户: ${user.username}\n原因: Cloudflare Turnstile 验证未通过`, shot);
+                continue;
+            }
+
             if (await page.getByText('Incorrect password or no account').isVisible().catch(() => false)) {
                 console.error('   >> ❌ 登录失败：账号或密码错误');
                 const shot = path.join(SCREENSHOTS_DIR, `${safeUsername}_login_failed.png`);
@@ -306,20 +322,15 @@ async function handleTurnstile(page, timeoutMs = 30000) {
                 continue;
             }
 
-            // 等待进入 dashboard
-            try {
-                await page.waitForURL('**/dashboard**', { timeout: 15000 });
-                console.log('   >> 登录成功，已进入 Dashboard');
-            } catch (e) {
-                console.log('   >> 当前 URL:', page.url());
+            if (currentUrl.includes('login')) {
+                console.error('   >> ❌ 登录失败：仍在登录页');
                 const shot = path.join(SCREENSHOTS_DIR, `${safeUsername}_login_check.png`);
                 await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
-                // 如果还在登录页说明真的失败了
-                if (page.url().includes('login')) {
-                    await sendTelegramMessage(`❌ *登录失败*\n用户: ${user.username}\n原因: 未能进入 Dashboard`, shot);
-                    continue;
-                }
+                await sendTelegramMessage(`❌ *登录失败*\n用户: ${user.username}\n原因: 未能进入 Dashboard`, shot);
+                continue;
             }
+
+            console.log('   >> ✅ 登录成功，已进入 Dashboard');
 
             // 寻找 See 链接
             console.log('正在寻找 "See" 链接...');
