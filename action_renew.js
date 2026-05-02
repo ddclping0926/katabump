@@ -389,6 +389,10 @@ async function handleTurnstile(page, timeoutMs = 30000) {
                 // 等待模态框内 Turnstile 加载
                 await page.waitForTimeout(2000);
 
+                // 打印所有 iframe URL 帮助诊断
+                const allFrameUrls = page.frames().map(f => f.url()).filter(u => u && u !== 'about:blank');
+                console.log('   >> 当前所有 iframe URL:', allFrameUrls.join(' | '));
+
                 // 处理模态框内 Turnstile
                 await handleTurnstile(page, 35000);
 
