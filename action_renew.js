@@ -371,7 +371,12 @@ async function handleTurnstile(page, timeoutMs = 30000) {
                     break;
                 }
 
-                await renewBtn.click();
+                // 先滚动到按钮，确保可见
+                await renewBtn.scrollIntoViewIfNeeded();
+                await page.waitForTimeout(500);
+
+                // 同时用 Playwright click 和 JS click 双保险
+                await renewBtn.click({ force: true });
                 console.log('Renew 按钮已点击，等待模态框...');
 
                 // 等待 #renew-modal 变为 visible（最多10秒）
@@ -412,10 +417,67 @@ async function handleTurnstile(page, timeoutMs = 30000) {
                 } catch (e) {}
 
                 // 等待 Turnstile 加载
-                await page.waitForTimeout(2000);
+                await page.waitForTimeout(3000);
 
-                // 处理 Turnstile
-                await handleTurnstile(page, 35000);
+                // 处理 ALTCHA 验证码（"I'm not a robot" checkbox）
+                console.log('   >> 检测 ALTCHA 验证码...');
+                let altchaClicked = false;
+                for (let ac = 0; ac < 10; ac++) {
+                    altchaClicked = await page.evaluate(() => {
+                        // ALTCHA 的 checkbox 在模态框内
+                        const modal = document.querySelector('#renew-modal');
+                        if (!modal) return false;
+
+                        // 尝试各种可能的选择器
+                        const selectors = [
+                            'altcha-widget',
+                            'input[type="checkbox"]',
+                            '.altcha',
+                            '[name="altcha"]',
+                            'label[for*="altcha"]',
+                        ];
+                        for (const sel of selectors) {
+                            const el = modal.querySelector(sel);
+                            if (el) {
+                                el.click();
+                                console.log('Clicked ALTCHA element:', sel);
+                                return true;
+                            }
+                        }
+
+                        // 尝试在 shadow DOM 里找
+                        const widgets = modal.querySelectorAll('*');
+                        for (const w of widgets) {
+                            if (w.shadowRoot) {
+                                const cb = w.shadowRoot.querySelector('input[type="checkbox"], button, .checkbox');
+                                if (cb) { cb.click(); return true; }
+                            }
+                        }
+                        return false;
+                    }).catch(() => false);
+
+                    if (altchaClicked) {
+                        console.log(`   >> ✅ ALTCHA checkbox 已点击（第 ${ac + 1} 次尝试）`);
+                        // 等待 ALTCHA 完成工作量证明（需要几秒）
+                        await page.waitForTimeout(4000);
+                        break;
+                    }
+                    console.log(`   >> [ALTCHA ${ac + 1}/10] 未找到 checkbox，等待...`);
+                    await page.waitForTimeout(1000);
+                }
+
+                if (!altchaClicked) {
+                    // 最后尝试：用 mouse.click 点击 checkbox 的视觉位置
+                    console.log('   >> 尝试用坐标点击 ALTCHA checkbox...');
+                    try {
+                        const modalBox = await modal.boundingBox();
+                        if (modalBox) {
+                            // checkbox 通常在模态框内 "I'm not a robot" 左侧
+                            await page.mouse.click(modalBox.x + 20, modalBox.y + modalBox.height * 0.5);
+                            await page.waitForTimeout(4000);
+                        }
+                    } catch(e) {}
+                }
 
                 // 截图
                 const tsShot = path.join(SCREENSHOTS_DIR, `${safeUsername}_attempt_${attempt}.png`);
