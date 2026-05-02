@@ -419,65 +419,76 @@ async function handleTurnstile(page, timeoutMs = 30000) {
                 // 等待 Turnstile 加载
                 await page.waitForTimeout(3000);
 
-                // 处理 ALTCHA 验证码（"I'm not a robot" checkbox）
+                // 处理 ALTCHA 验证码
+                // ALTCHA 用 Web Component 实现，checkbox 在 Shadow DOM 里
                 console.log('   >> 检测 ALTCHA 验证码...');
-                let altchaClicked = false;
-                for (let ac = 0; ac < 10; ac++) {
-                    altchaClicked = await page.evaluate(() => {
-                        // ALTCHA 的 checkbox 在模态框内
-                        const modal = document.querySelector('#renew-modal');
-                        if (!modal) return false;
 
-                        // 尝试各种可能的选择器
-                        const selectors = [
-                            'altcha-widget',
-                            'input[type="checkbox"]',
-                            '.altcha',
-                            '[name="altcha"]',
-                            'label[for*="altcha"]',
-                        ];
-                        for (const sel of selectors) {
-                            const el = modal.querySelector(sel);
-                            if (el) {
-                                el.click();
-                                console.log('Clicked ALTCHA element:', sel);
-                                return true;
-                            }
+                // 等待 altcha-widget 加载
+                let altchaDone = false;
+                for (let ac = 0; ac < 15; ac++) {
+                    // 方法1：通过 Playwright locator 直接找 shadow DOM 里的 checkbox
+                    try {
+                        const altchaCheckbox = page.locator('altcha-widget').locator('input[type="checkbox"]');
+                        if (await altchaCheckbox.count() > 0) {
+                            await altchaCheckbox.first().click({ force: true });
+                            console.log(`   >> ✅ 通过 locator 点击了 ALTCHA checkbox（第 ${ac + 1} 次）`);
+                            // 等待 ALTCHA 完成工作量证明运算（通常需要2-5秒）
+                            await page.waitForTimeout(6000);
+                            altchaDone = true;
+                            break;
                         }
+                    } catch(e) {}
 
-                        // 尝试在 shadow DOM 里找
-                        const widgets = modal.querySelectorAll('*');
-                        for (const w of widgets) {
-                            if (w.shadowRoot) {
-                                const cb = w.shadowRoot.querySelector('input[type="checkbox"], button, .checkbox');
-                                if (cb) { cb.click(); return true; }
-                            }
-                        }
+                    // 方法2：JS 直接操作 shadow DOM
+                    const clicked = await page.evaluate(() => {
+                        const widget = document.querySelector('altcha-widget');
+                        if (!widget) return false;
+                        const shadow = widget.shadowRoot;
+                        if (!shadow) return false;
+                        const cb = shadow.querySelector('input[type="checkbox"]');
+                        if (cb) { cb.click(); return 'checkbox'; }
+                        const btn = shadow.querySelector('button');
+                        if (btn) { btn.click(); return 'button'; }
+                        const label = shadow.querySelector('label');
+                        if (label) { label.click(); return 'label'; }
                         return false;
                     }).catch(() => false);
 
-                    if (altchaClicked) {
-                        console.log(`   >> ✅ ALTCHA checkbox 已点击（第 ${ac + 1} 次尝试）`);
-                        // 等待 ALTCHA 完成工作量证明（需要几秒）
-                        await page.waitForTimeout(4000);
+                    if (clicked) {
+                        console.log(`   >> ✅ JS shadow DOM 点击成功: ${clicked}（第 ${ac + 1} 次）`);
+                        await page.waitForTimeout(6000);
+                        altchaDone = true;
                         break;
                     }
-                    console.log(`   >> [ALTCHA ${ac + 1}/10] 未找到 checkbox，等待...`);
+
+                    console.log(`   >> [ALTCHA ${ac + 1}/15] 等待 widget 加载...`);
                     await page.waitForTimeout(1000);
                 }
 
-                if (!altchaClicked) {
-                    // 最后尝试：用 mouse.click 点击 checkbox 的视觉位置
-                    console.log('   >> 尝试用坐标点击 ALTCHA checkbox...');
+                if (!altchaDone) {
+                    // 最后兜底：用坐标点击 checkbox 的视觉位置
+                    console.log('   >> 尝试坐标点击 ALTCHA checkbox...');
                     try {
                         const modalBox = await modal.boundingBox();
                         if (modalBox) {
-                            // checkbox 通常在模态框内 "I'm not a robot" 左侧
-                            await page.mouse.click(modalBox.x + 20, modalBox.y + modalBox.height * 0.5);
-                            await page.waitForTimeout(4000);
+                            // 从截图看 checkbox 在模态框内约 x+100, y+105 处
+                            const cbX = modalBox.x + 100;
+                            const cbY = modalBox.y + 105;
+                            await page.mouse.move(cbX - 10, cbY - 10);
+                            await page.waitForTimeout(200);
+                            await page.mouse.click(cbX, cbY, { delay: 80 });
+                            console.log(`   >> 坐标点击 (${cbX}, ${cbY})`);
+                            await page.waitForTimeout(6000);
                         }
                     } catch(e) {}
                 }
+
+                // 检查 ALTCHA 是否验证成功（hidden input 会被填充）
+                const altchaToken = await page.evaluate(() => {
+                    const el = document.querySelector('input[name="altcha"]');
+                    return el ? el.value : null;
+                }).catch(() => null);
+                console.log(`   >> ALTCHA token: ${altchaToken ? '已获取（长度' + altchaToken.length + '）' : '未获取'}`);
 
                 // 截图
                 const tsShot = path.join(SCREENSHOTS_DIR, `${safeUsername}_attempt_${attempt}.png`);
