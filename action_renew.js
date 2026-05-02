@@ -158,31 +158,19 @@ async function handleTurnstile(page, timeoutMs = 30000) {
 
                 console.log(`   >> 找到 Turnstile iframe: x=${box.x.toFixed(0)}, y=${box.y.toFixed(0)}, w=${box.width.toFixed(0)}, h=${box.height.toFixed(0)}`);
 
-                // checkbox 在 iframe 内左侧，尝试多个 x 位置确保点中
-                // 从截图看 checkbox 约在 iframe 左边 10-20px 处
                 const clickY = box.y + box.height / 2;
-                const clickCandidates = [
-                    box.x + 16,  // 最左侧
-                    box.x + 24,  // 稍右
-                    box.x + 32,  // 再右一点
-                ];
-
-                const client = await page.context().newCDPSession(page);
-
-                for (const clickX of clickCandidates) {
-                    // 鼠标移入
-                    await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: clickX, y: clickY, button: 'none' });
-                    await new Promise(r => setTimeout(r, 150 + Math.random() * 150));
-                    // 按下
-                    await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: clickX, y: clickY, button: 'left', clickCount: 1 });
-                    await new Promise(r => setTimeout(r, 60 + Math.random() * 80));
-                    // 释放
-                    await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: clickX, y: clickY, button: 'left', clickCount: 1 });
-                    console.log(`   >> CDP 点击 (${clickX.toFixed(0)}, ${clickY.toFixed(0)})`);
-                    await new Promise(r => setTimeout(r, 300));
+                // 先用 page.mouse 模拟真实鼠标（xvfb 环境下更自然）
+                // checkbox 通常在 iframe 左边 10-30px 内
+                for (const offsetX of [12, 20, 28]) {
+                    const clickX = box.x + offsetX;
+                    await page.mouse.move(box.x + box.width / 2, box.y - 10); // 先移到 iframe 外
+                    await new Promise(r => setTimeout(r, 200 + Math.random() * 200));
+                    await page.mouse.move(clickX, clickY, { steps: 8 }); // 缓慢移入
+                    await new Promise(r => setTimeout(r, 300 + Math.random() * 200));
+                    await page.mouse.click(clickX, clickY, { delay: 80 + Math.random() * 60 });
+                    console.log(`   >> mouse.click (${clickX.toFixed(0)}, ${clickY.toFixed(0)})`);
+                    await new Promise(r => setTimeout(r, 500));
                 }
-
-                await client.detach();
 
                 // 等待验证结果，最多 12 秒
                 console.log('   >> 等待 Cloudflare 验证结果（最多12秒）...');
