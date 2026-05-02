@@ -323,12 +323,25 @@ async function handleTurnstile(page, timeoutMs = 30000) {
 
             // 寻找 See 链接
             console.log('正在寻找 "See" 链接...');
+            console.log('   >> 当前 URL:', page.url());
             try {
-                await page.getByRole('link', { name: 'See' }).first().waitFor({ timeout: 15000 });
-                await page.getByRole('link', { name: 'See' }).first().click();
+                // 等待页面稳定
+                await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+                const seeLink = page.getByRole('link', { name: 'See' }).first();
+                await seeLink.waitFor({ timeout: 20000 });
+                // 滚动到元素确保可见
+                await seeLink.scrollIntoViewIfNeeded();
+                await page.waitForTimeout(500);
+                await seeLink.click();
+                console.log('   >> "See" 链接已点击');
                 await page.waitForTimeout(2000);
             } catch (e) {
                 console.log('未找到 "See" 链接:', e.message);
+                // 打印页面所有链接帮助诊断
+                const links = await page.evaluate(() =>
+                    Array.from(document.querySelectorAll('a')).map(a => a.innerText.trim()).filter(t => t)
+                ).catch(() => []);
+                console.log('   >> 页面现有链接:', links.slice(0, 20).join(' | '));
                 continue;
             }
 
