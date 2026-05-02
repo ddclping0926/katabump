@@ -373,10 +373,45 @@ async function handleTurnstile(page, timeoutMs = 30000) {
 
                 await renewBtn.click();
                 console.log('Renew 按钮已点击，等待模态框...');
+                await page.waitForTimeout(3000);
 
-                const modal = page.locator('#renew-modal');
-                try { await modal.waitFor({ state: 'visible', timeout: 8000 }); } catch (e) {
-                    console.log('模态框未出现，重试...');
+                // 打印所有 iframe URL 和页面上的模态框信息帮助诊断
+                const allFrameUrls = page.frames().map(f => f.url()).filter(u => u && u !== 'about:blank');
+                console.log('   >> 当前所有 frame URL:', allFrameUrls.join(' | '));
+
+                // 检测模态框：尝试多种选择器
+                let modal = null;
+                let modalSelector = '';
+                const modalSelectors = [
+                    '#renew-modal',
+                    '[id*="renew"]',
+                    '[class*="modal"]',
+                    '[role="dialog"]',
+                    '.modal',
+                    '.dialog',
+                ];
+                for (const sel of modalSelectors) {
+                    try {
+                        const el = page.locator(sel).first();
+                        await el.waitFor({ state: 'visible', timeout: 2000 });
+                        if (await el.isVisible()) {
+                            modal = el;
+                            modalSelector = sel;
+                            console.log(`   >> 找到模态框: ${sel}`);
+                            break;
+                        }
+                    } catch (e) {}
+                }
+
+                if (!modal) {
+                    // 打印页面上所有可见的按钮文字，帮助诊断
+                    const btns = await page.evaluate(() =>
+                        Array.from(document.querySelectorAll('button')).map(b => b.innerText.trim()).filter(t => t)
+                    ).catch(() => []);
+                    console.log('   >> 页面按钮:', btns.join(' | '));
+                    console.log('   >> 未找到任何模态框，刷新重试...');
+                    await page.reload();
+                    await page.waitForTimeout(3000);
                     continue;
                 }
 
@@ -386,14 +421,10 @@ async function handleTurnstile(page, timeoutMs = 30000) {
                     if (box) await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 5 });
                 } catch (e) {}
 
-                // 等待模态框内 Turnstile 加载
+                // 等待 Turnstile 加载
                 await page.waitForTimeout(2000);
 
-                // 打印所有 iframe URL 帮助诊断
-                const allFrameUrls = page.frames().map(f => f.url()).filter(u => u && u !== 'about:blank');
-                console.log('   >> 当前所有 iframe URL:', allFrameUrls.join(' | '));
-
-                // 处理模态框内 Turnstile
+                // 处理 Turnstile
                 await handleTurnstile(page, 35000);
 
                 // 截图
@@ -401,8 +432,15 @@ async function handleTurnstile(page, timeoutMs = 30000) {
                 await page.screenshot({ path: tsShot, fullPage: true }).catch(() => {});
                 console.log(`   >> 📸 截图已保存: ${safeUsername}_attempt_${attempt}.png`);
 
-                // 点击确认
-                const confirmBtn = modal.getByRole('button', { name: 'Renew' });
+                // 点击确认：在模态框内找 Renew 按钮，找不到就在整个页面找
+                let confirmBtn = modal.getByRole('button', { name: 'Renew' });
+                if (!await confirmBtn.isVisible().catch(() => false)) {
+                    confirmBtn = page.getByRole('button', { name: 'Confirm' }).first();
+                }
+                if (!await confirmBtn.isVisible().catch(() => false)) {
+                    confirmBtn = page.getByRole('button', { name: 'Renew', exact: true }).last();
+                }
+
                 if (!await confirmBtn.isVisible().catch(() => false)) {
                     console.log('   >> 确认按钮未找到，刷新重试...');
                     await page.reload();
@@ -444,7 +482,8 @@ async function handleTurnstile(page, timeoutMs = 30000) {
                 }
 
                 await page.waitForTimeout(2000);
-                if (!await modal.isVisible().catch(() => true)) {
+                const modalStillVisible = await modal.isVisible().catch(() => false);
+                if (!modalStillVisible) {
                     console.log('   >> ✅ 模态框关闭，续期成功！');
                     const successShot = path.join(SCREENSHOTS_DIR, `${safeUsername}_success.png`);
                     await page.screenshot({ path: successShot, fullPage: true }).catch(() => {});
