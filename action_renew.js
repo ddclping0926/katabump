@@ -373,43 +373,33 @@ async function handleTurnstile(page, timeoutMs = 30000) {
 
                 await renewBtn.click();
                 console.log('Renew 按钮已点击，等待模态框...');
-                await page.waitForTimeout(3000);
 
-                // 打印所有 iframe URL 和页面上的模态框信息帮助诊断
+                // 等待 #renew-modal 变为 visible（最多10秒）
+                const modal = page.locator('#renew-modal');
+                let modalVisible = false;
+                try {
+                    await modal.waitFor({ state: 'visible', timeout: 10000 });
+                    modalVisible = await modal.isVisible();
+                } catch(e) {}
+
+                // 截图看模态框实际状态
+                const preShot = path.join(SCREENSHOTS_DIR, `${safeUsername}_modal_check_${attempt}.png`);
+                await page.screenshot({ path: preShot, fullPage: true }).catch(() => {});
+
                 const allFrameUrls = page.frames().map(f => f.url()).filter(u => u && u !== 'about:blank');
-                console.log('   >> 当前所有 frame URL:', allFrameUrls.join(' | '));
+                console.log('   >> frame URLs:', allFrameUrls.join(' | '));
+                console.log(`   >> #renew-modal visible: ${modalVisible}`);
 
-                // 检测模态框：尝试多种选择器
-                let modal = null;
-                let modalSelector = '';
-                const modalSelectors = [
-                    '#renew-modal',
-                    '[id*="renew"]',
-                    '[class*="modal"]',
-                    '[role="dialog"]',
-                    '.modal',
-                    '.dialog',
-                ];
-                for (const sel of modalSelectors) {
-                    try {
-                        const el = page.locator(sel).first();
-                        await el.waitFor({ state: 'visible', timeout: 2000 });
-                        if (await el.isVisible()) {
-                            modal = el;
-                            modalSelector = sel;
-                            console.log(`   >> 找到模态框: ${sel}`);
-                            break;
-                        }
-                    } catch (e) {}
-                }
+                // 打印模态框的 display 样式帮助诊断
+                const modalDisplay = await page.evaluate(() => {
+                    const el = document.querySelector('#renew-modal');
+                    if (!el) return 'not found';
+                    return window.getComputedStyle(el).display + ' / ' + el.style.display;
+                }).catch(() => 'error');
+                console.log(`   >> #renew-modal display: ${modalDisplay}`);
 
-                if (!modal) {
-                    // 打印页面上所有可见的按钮文字，帮助诊断
-                    const btns = await page.evaluate(() =>
-                        Array.from(document.querySelectorAll('button')).map(b => b.innerText.trim()).filter(t => t)
-                    ).catch(() => []);
-                    console.log('   >> 页面按钮:', btns.join(' | '));
-                    console.log('   >> 未找到任何模态框，刷新重试...');
+                if (!modalVisible) {
+                    console.log('   >> 模态框未显示，刷新重试...');
                     await page.reload();
                     await page.waitForTimeout(3000);
                     continue;
